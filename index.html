@@ -19,6 +19,46 @@
 
 	<div id="gl-view"></div>
 
+	<!-- Load shaders ////////////////////////////////////////////////////////////// -->
+	<script type="x-shader/x-vertex" id="vert_BaseShader">
+			varying vec3 pass_color;
+			varying vec2 pass_uv;
+			varying float pass_CamDist;
+			void main() {
+				vec4 worldPos = modelMatrix * vec4( position, 1.0 );
+
+				vec3 viewDirection = cameraPosition - worldPos.xyz;
+
+				vec3 cameraRight = normalize(vec4(1.0,0.0,0.0,0.0) * viewMatrix).rgb;
+				vec3 cameraUp = normalize(vec4(0.0,1.0,0.0,1.0) * viewMatrix).rgb;
+				vec3 cameraForward = (vec4(0.0,0.0,-1.0,0.0) * viewMatrix).rgb;
+
+				float r = dot(cameraRight, normal) * 0.5 + 0.5;
+				float g = dot(cameraUp, normal) * 0.5 + 0.5;
+				float b = dot(-cameraForward, normal) * 0.25 + 0.75;
+
+				pass_color = mix(vec3(0.0,0.0,0.0), vec3(r,g,b), sign(dot(viewDirection, normal)) * 0.5 + 0.5);
+				pass_uv = uv;
+				pass_CamDist = length(viewDirection);
+
+				gl_Position = projectionMatrix * viewMatrix * worldPos;
+			}
+	</script>
+
+	<script type="x-shader/x-fragment" id="frag_BaseShader">
+	varying vec3 pass_color;
+	varying vec2 pass_uv;
+	varying float pass_CamDist;
+		void main() {
+			float edges = max(abs(pass_uv.x),abs(pass_uv.y));
+			edges = edges *edges *edges * 0.15 * saturate(1.0-pass_CamDist);
+			gl_FragColor.rgb = pass_color - edges;
+			gl_FragColor.a = 1.0;
+		}
+	</script>
+
+	<!-- /////////////////////////////////////////////////////////////////////////// -->
+
 	<script>
 		const bedSizeX = 68.04;
 		const bedSizeY = 120.96;
@@ -29,8 +69,20 @@
 		let sceneScale = 0.1;
 		let quads = [];
 		let sliceMesh = null;
-		let topSliceMat = new THREE.MeshBasicMaterial({ color: 'rgb(50,120,240)' });
 		let scene = null;
+
+		//-------------------------------------------------------------------------------------------
+		// Material setup
+		//-------------------------------------------------------------------------------------------
+
+		testMaterial = new THREE.ShaderMaterial( {
+			uniforms: {	},
+			vertexShader: document.getElementById( 'vert_BaseShader' ).textContent,
+			fragmentShader: document.getElementById( 'frag_BaseShader' ).textContent,
+			side: THREE.DoubleSide
+		} );
+
+		let topSliceMat = new THREE.MeshBasicMaterial({ color: 'rgb(50,120,240)' });
 
 		//-------------------------------------------------------------------------------------------
 		// Voxels.
@@ -105,14 +157,25 @@
 				indexBuffer[idx + 5] = i * 4 + 3;
 			}
 
+			let uvBuffer = new Float32Array(quadCount * 8);
+			for (let j = 0; j < quadCount; j++) {
+				let idx = j * 8;
+				uvBuffer[idx + 0] = -1.0; uvBuffer[idx + 1] = -1.0;
+				uvBuffer[idx + 2] = 1.0; uvBuffer[idx + 3] = -1.0;
+				uvBuffer[idx + 4] = 1.0; uvBuffer[idx + 5] = 1.0;
+				uvBuffer[idx + 6] = -1.0; uvBuffer[idx + 7] = 1.0;
+			}
+
+			sliceGeo.addAttribute( 'uv', new THREE.BufferAttribute( uvBuffer, 2 ) );
+
 			sliceGeo.setIndex(indexBuffer);
 			sliceGeo.computeVertexNormals();
-			let mat = new THREE.MeshLambertMaterial({ color: 'rgb(200, 200, 200)' });
+			let mat = testMaterial;//new THREE.MeshLambertMaterial({ color: 'rgb(200, 200, 200)' });
 			sliceMesh = new THREE.Mesh( sliceGeo, mat );
-			sliceMesh.position.x = bedSizeX * 0.5 * sceneScale;
+			sliceMesh.position.x = -bedSizeX * 0.5 * sceneScale;
 			sliceMesh.position.z = -bedSizeY * 0.5 * sceneScale;
 			sliceMesh.position.y = yPos * sceneScale;
-			sliceMesh.scale.x = -sceneScale;
+			sliceMesh.scale.x = sceneScale;
 			sliceMesh.scale.y = sceneScale * photonFile.header.layerThickness;
 			sliceMesh.scale.z = sceneScale;
 			scene.add(sliceMesh);
@@ -488,10 +551,10 @@
 							let ob = photonFile.layers[i].object;
 							ob.mesh.visible = (slider.value >= i);
 
-							if (i == slider.value)
+							/*if (i == slider.value)
 								ob.mesh.material = topSliceMat; //TODO remove backface culling on slice and hardcode a top-normal for nicer looks.
 							else
-								ob.mesh.material = ob.mat;
+								ob.mesh.material = testMaterial; //ob.mat;*/
 						}
 					}
 					slider.value = photonFile.header.layers - 1;
@@ -526,13 +589,13 @@
 			renderer.setSize(1280, 720);
 			document.getElementById('gl-view').appendChild( renderer.domElement );
 
-			var light = new THREE.PointLight( 'rgb(255, 190, 150)', 1, 50 );
+			/*var light = new THREE.PointLight( 'rgb(255, 190, 150)', 1, 50 );
 			light.position.set( 3, 3, 1 );
 			scene.add( light );
 
 			light = new THREE.PointLight( 'rgb(150, 190, 255)', 1, 50 );
 			light.position.set( -5, 4, -3 );
-			scene.add( light );
+			scene.add( light );*/
 
 			let gridHelper = new THREE.GridHelper(120 * sceneScale, 24 );
 			console.log(gridHelper.position);
