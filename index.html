@@ -8,16 +8,33 @@
 	<script src="libs/OrbitControls.js"></script>
 </head>
 
-<body>
-	<div>
+<body onresize="resizeCanvasToDisplaySize()">
+	<div style="color:#ffffff">
 		<input type="file" id="files" name="files[]" accept=".photon,.photons" onchange="onFileSelected(event)"/>
 		<output id="list"></output>
 		<input id="layer-slider" type="range" min="0" max="100" value="0" style="width: 500px;">
+		<div name="Glossary">
+			<p> Move: RMB </p>
+			<p> Zoom: scroll or MMB + drag </p>
+			<p> Rotate: LMB </p>
+			<p> Reset: F </p>
+		</div>
 	</div>
 
-	<canvas id="thumb-small"></canvas>
+	<canvas id="thumb-small" style="
+		position: absolute;
+		right: 20px;
+		top: 20px;
+	"></canvas>
 
-	<div id="gl-view"></div>
+	<div id="gl-view" style="
+		position: absolute;
+		top: 0px;
+		left: 0px;
+		z-index: -1;
+		width: 100%;
+		height: 100%;
+	"></div>
 
 	<!-- Load shaders ////////////////////////////////////////////////////////////// -->
 	<script type="x-shader/x-vertex" id="vert_BaseShader">
@@ -71,6 +88,9 @@
 		let sliceMesh = null;
 		let scene = null;
 
+		let cameraOrbitTarget = null; // global orbit target mesh
+		let renderer = null;
+		let camera = null;
 		//-------------------------------------------------------------------------------------------
 		// Material setup
 		//-------------------------------------------------------------------------------------------
@@ -583,11 +603,13 @@
 		function create3dScene() {
 			scene = new THREE.Scene();
 			scene.background = new THREE.Color( 0x646464 );
-			let camera = new THREE.PerspectiveCamera( 75, 1280 / 720, 0.01, 100 );
+			camera = new THREE.PerspectiveCamera( 75, 1280 / 720, 0.01, 100 );
 			let controls = new THREE.OrbitControls(camera, document.getElementById('gl-view'));
-			let renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer = new THREE.WebGLRenderer({ antialias: true });
 			renderer.setSize(1280, 720);
 			document.getElementById('gl-view').appendChild( renderer.domElement );
+			renderer.domElement.style.height = "100%";
+			renderer.domElement.style.width = "100%";
 
 			/*var light = new THREE.PointLight( 'rgb(255, 190, 150)', 1, 50 );
 			light.position.set( 3, 3, 1 );
@@ -597,13 +619,43 @@
 			light.position.set( -5, 4, -3 );
 			scene.add( light );*/
 
+			/*var test_geometry = new THREE.SphereGeometry( 0.05, 32, 16 );
+			var test_material = new THREE.MeshBasicMaterial( {color: 0xff0000} );*/
+
+
+			///////////////////////////
+
+			var gizmo_Vertices = [
+				-1, 0, 0,	1, 0, 0,
+				0, -1, 0,	0, 1, 0,
+				0, 0, -1,	0, 0, 1
+			];
+			var gizmo_Colors = [
+				1, 0, 0,	1, 0.1, 0,
+				0, 1, 0,	0.1, 1, 0,
+				0, 0, 1,	0, 0.1, 1
+			];
+			var gizmo_Geometry = new THREE.BufferGeometry();
+			gizmo_Geometry.addAttribute( 'position', new THREE.Float32BufferAttribute( gizmo_Vertices, 3 ) );
+			gizmo_Geometry.addAttribute( 'color', new THREE.Float32BufferAttribute( gizmo_Colors, 3 ) );
+			var gizmo_Material = new THREE.LineBasicMaterial( { vertexColors: THREE.VertexColors } );
+			cameraOrbitTarget = new THREE.LineSegments(gizmo_Geometry, gizmo_Material);
+			scene.add( cameraOrbitTarget );
+
+			///////////////////////////
+
+
+
 			let gridHelper = new THREE.GridHelper(120 * sceneScale, 24 );
 			console.log(gridHelper.position);
 			scene.add(gridHelper);
 
-			camera.position.set( 0, 10, 10 );
-			controls.update();
+			camera.position.set( 0, 3, 3);
 
+			controls.update();
+			controls.updateGizmo();
+
+			resizeCanvasToDisplaySize(renderer, camera);
 			// Update the 3d view at the browser framerate.
 			function animate() {
 				requestAnimationFrame( animate );
@@ -628,6 +680,22 @@
 			photonFile = null;
 		}
 
+		function resizeCanvasToDisplaySize() {
+		  const canvas = document.getElementById("gl-view").firstChild;
+		  // look up the size the canvas is being displayed
+		  const width = canvas.clientWidth;
+		  const height = canvas.clientHeight;
+
+		  // adjust displayBuffer size to match
+		  if (canvas.width !== width || canvas.height !== height) {
+		    // you must pass false here or three.js sadly fights the browser
+		    renderer.setSize(width, height, false);
+		    camera.aspect = width / height;
+		    camera.updateProjectionMatrix();
+
+		    // update any render target sizes here
+		  }
+		}
 		//-------------------------------------------------------------------------------------------
 		// Application entry.
 		//-------------------------------------------------------------------------------------------

@@ -60,7 +60,7 @@ THREE.OrbitControls = function ( object, domElement ) {
 	// Set to false to disable panning
 	this.enablePan = true;
 	this.panSpeed = 1.0;
-	this.screenSpacePanning = false; // if true, pan in screen-space
+	this.screenSpacePanning = true; // if true, pan in screen-space
 	this.keyPanSpeed = 7.0;	// pixels moved per arrow key push
 
 	// Set to true to automatically rotate around the target
@@ -69,11 +69,11 @@ THREE.OrbitControls = function ( object, domElement ) {
 	this.autoRotateSpeed = 2.0; // 30 seconds per round when fps is 60
 
 	// Set to false to disable use of the keys
-	this.enableKeys = true;
+	this.enableKeys = false;
 
-	// The four arrow keys
-	this.keys = { LEFT: 37, UP: 38, RIGHT: 39, BOTTOM: 40 };
-
+	// keys
+	this.keys = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, CTRL : 17, RESET: 70};
+	this.keysPressed = {LEFT: false, UP: false, RIGHT: false, DOWN: false, CTRL: false};
 	// Mouse buttons
 	this.mouseButtons = { ORBIT: THREE.MOUSE.LEFT, ZOOM: THREE.MOUSE.MIDDLE, PAN: THREE.MOUSE.RIGHT };
 
@@ -85,6 +85,15 @@ THREE.OrbitControls = function ( object, domElement ) {
 	//
 	// public methods
 	//
+
+	this.updateGizmo = function(){
+		cameraOrbitTarget.scale.x = spherical.radius/15;
+		cameraOrbitTarget.scale.y = spherical.radius/15;
+		cameraOrbitTarget.scale.z = spherical.radius/15;
+		cameraOrbitTarget.position.x = scope.target.x;
+		cameraOrbitTarget.position.y = scope.target.y;
+		cameraOrbitTarget.position.z = scope.target.z;
+	}
 
 	this.getPolarAngle = function () {
 
@@ -234,7 +243,8 @@ THREE.OrbitControls = function ( object, domElement ) {
 		document.removeEventListener( 'mousemove', onMouseMove, false );
 		document.removeEventListener( 'mouseup', onMouseUp, false );
 
-		window.removeEventListener( 'keydown', onKeyDown, false );
+		window.removeEventListener( 'keydown', handleKeyDown, false );
+		window.removeEventListener( 'keyup', handleKeyUp, false );
 
 		//scope.dispatchEvent( { type: 'dispose' } ); // should this be added here?
 
@@ -329,7 +339,6 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 				v.setFromMatrixColumn( objectMatrix, 0 );
 				v.crossVectors( scope.object.up, v );
-
 			}
 
 			v.multiplyScalar( distance );
@@ -381,11 +390,14 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 	}();
 
+
+
 	function dollyIn( dollyScale ) {
 
 		if ( scope.object.isPerspectiveCamera ) {
 
 			scale /= dollyScale;
+			scope.updateGizmo();
 
 		} else if ( scope.object.isOrthographicCamera ) {
 
@@ -407,6 +419,7 @@ THREE.OrbitControls = function ( object, domElement ) {
 		if ( scope.object.isPerspectiveCamera ) {
 
 			scale *= dollyScale;
+			scope.updateGizmo();
 
 		} else if ( scope.object.isOrthographicCamera ) {
 
@@ -498,6 +511,7 @@ THREE.OrbitControls = function ( object, domElement ) {
 	function handleMouseMovePan( event ) {
 
 		//console.log( 'handleMouseMovePan' );
+		scope.updateGizmo();
 
 		panEnd.set( event.clientX, event.clientY );
 
@@ -537,32 +551,71 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 	function handleKeyDown( event ) {
 
-		//console.log( 'handleKeyDown' );
+		// if ( scope.enabled === false || scope.enableKeys === false || scope.enablePan === false ) return;
 
+ 		if ( scope.enabled != false && scope.enableKeys != false && scope.enablePan != false ){
+			switch ( event.keyCode ) {
+				case scope.keys.UP:
+					pan( 0, scope.keyPanSpeed );
+					scope.keysPressed.UP = true;
+					scope.update();
+					break;
+
+				case scope.keys.DOWN:
+					pan( 0, - scope.keyPanSpeed );
+					scope.keysPressed.DOWN = true;
+					scope.update();
+					break;
+
+				case scope.keys.LEFT:
+					pan( scope.keyPanSpeed, 0 );
+					scope.keysPressed.LEFT = true;
+					scope.update();
+					break;
+
+				case scope.keys.RIGHT:
+					pan( - scope.keyPanSpeed, 0 );
+					scope.keysPressed.RIGHT = true;
+					scope.update();
+					break;
+			}
+		}
+
+		if(event.keyCode == scope.keys.CTRL){
+			scope.keysPressed.CTRL = true;
+		}
+
+		if(event.keyCode == scope.keys.RESET){
+			scope.target = new THREE.Vector3(0,0,0);
+			scope.object.position.set( 0, 3, 3);
+			scope.update();
+			scope.updateGizmo();
+		}
+
+	}
+
+	function handleKeyUp( event ){
 		switch ( event.keyCode ) {
-
 			case scope.keys.UP:
-				pan( 0, scope.keyPanSpeed );
-				scope.update();
+				scope.keysPressed.UP = false;
 				break;
 
-			case scope.keys.BOTTOM:
-				pan( 0, - scope.keyPanSpeed );
-				scope.update();
+			case scope.keys.DOWN:
+				scope.keysPressed.DOWN = false;
 				break;
 
 			case scope.keys.LEFT:
-				pan( scope.keyPanSpeed, 0 );
-				scope.update();
+				scope.keysPressed.LEFT = false;
 				break;
 
 			case scope.keys.RIGHT:
-				pan( - scope.keyPanSpeed, 0 );
-				scope.update();
+				scope.keysPressed.RIGHT = false;
 				break;
 
+			case scope.keys.CTRL:
+				scope.keysPressed.CTRL = false;
+				break;
 		}
-
 	}
 
 	function handleTouchStartRotate( event ) {
@@ -678,33 +731,21 @@ THREE.OrbitControls = function ( object, domElement ) {
 		switch ( event.button ) {
 
 			case scope.mouseButtons.ORBIT:
-
 				if ( scope.enableRotate === false ) return;
-
 				handleMouseDownRotate( event );
-
 				state = STATE.ROTATE;
-
 				break;
 
 			case scope.mouseButtons.ZOOM:
-
 				if ( scope.enableZoom === false ) return;
-
 				handleMouseDownDolly( event );
-
 				state = STATE.DOLLY;
-
 				break;
 
 			case scope.mouseButtons.PAN:
-
 				if ( scope.enablePan === false ) return;
-
 				handleMouseDownPan( event );
-
 				state = STATE.PAN;
-
 				break;
 
 		}
@@ -786,13 +827,17 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 	}
 
-	function onKeyDown( event ) {
+	/*function onKeyDown( event ) {
 
-		if ( scope.enabled === false || scope.enableKeys === false || scope.enablePan === false ) return;
+		//if ( scope.enabled === false || scope.enableKeys === false || scope.enablePan === false ) return;
 
 		handleKeyDown( event );
 
 	}
+
+	function onKeyUp( event ){
+
+	}*/
 
 	function onTouchStart( event ) {
 
@@ -891,8 +936,6 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 	}
 
-	//
-
 	scope.domElement.addEventListener( 'contextmenu', onContextMenu, false );
 
 	scope.domElement.addEventListener( 'mousedown', onMouseDown, false );
@@ -902,8 +945,8 @@ THREE.OrbitControls = function ( object, domElement ) {
 	scope.domElement.addEventListener( 'touchend', onTouchEnd, false );
 	scope.domElement.addEventListener( 'touchmove', onTouchMove, false );
 
-	window.addEventListener( 'keydown', onKeyDown, false );
-
+	window.addEventListener( 'keydown', handleKeyDown, false );
+	window.addEventListener( 'keyup', handleKeyUp, false );
 	// force an update at start
 
 	this.update();
