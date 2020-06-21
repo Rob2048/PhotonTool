@@ -8,16 +8,73 @@
 	<script src="libs/OrbitControls.js"></script>
 </head>
 
-<body>
-	<div>
-		<input type="file" id="files" name="files[]" accept=".photon" onchange="onFileSelected(event)"/>
+<body onresize="resizeCanvasToDisplaySize()">
+	<div style="color:#ffffff">
+		<input type="file" id="files" name="files[]" accept=".photon,.photons" onchange="onFileSelected(event)"/>
 		<output id="list"></output>
 		<input id="layer-slider" type="range" min="0" max="100" value="0" style="width: 500px;">
+		<div name="Glossary">
+			<p> Move: RMB </p>
+			<p> Zoom: scroll or MMB + drag </p>
+			<p> Rotate: LMB </p>
+			<p> Reset: F </p>
+		</div>
 	</div>
 
-	<canvas id="thumb-small"></canvas>
-	
-	<div id="gl-view"></div>
+	<canvas id="thumb-small" style="
+		position: absolute;
+		right: 20px;
+		top: 20px;
+	"></canvas>
+
+	<div id="gl-view" style="
+		position: absolute;
+		top: 0px;
+		left: 0px;
+		z-index: -1;
+		width: 100%;
+		height: 100%;
+	"></div>
+
+	<!-- Load shaders ////////////////////////////////////////////////////////////// -->
+	<script type="x-shader/x-vertex" id="vert_BaseShader">
+			varying vec3 pass_color;
+			varying vec2 pass_uv;
+			varying float pass_CamDist;
+			void main() {
+				vec4 worldPos = modelMatrix * vec4( position, 1.0 );
+
+				vec3 viewDirection = cameraPosition - worldPos.xyz;
+
+				vec3 cameraRight = normalize(vec4(1.0,0.0,0.0,0.0) * viewMatrix).rgb;
+				vec3 cameraUp = normalize(vec4(0.0,1.0,0.0,1.0) * viewMatrix).rgb;
+				vec3 cameraForward = (vec4(0.0,0.0,-1.0,0.0) * viewMatrix).rgb;
+
+				float r = dot(cameraRight, normal) * 0.5 + 0.5;
+				float g = dot(cameraUp, normal) * 0.5 + 0.5;
+				float b = dot(-cameraForward, normal) * 0.25 + 0.75;
+
+				pass_color = mix(vec3(0.0,0.0,0.0), vec3(r,g,b), sign(dot(viewDirection, normal)) * 0.5 + 0.5);
+				pass_uv = uv;
+				pass_CamDist = length(viewDirection);
+
+				gl_Position = projectionMatrix * viewMatrix * worldPos;
+			}
+	</script>
+
+	<script type="x-shader/x-fragment" id="frag_BaseShader">
+	varying vec3 pass_color;
+	varying vec2 pass_uv;
+	varying float pass_CamDist;
+		void main() {
+			float edges = max(abs(pass_uv.x),abs(pass_uv.y));
+			edges = edges *edges *edges * 0.15 * saturate(1.0-pass_CamDist);
+			gl_FragColor.rgb = pass_color - edges;
+			gl_FragColor.a = 1.0;
+		}
+	</script>
+
+	<!-- /////////////////////////////////////////////////////////////////////////// -->
 
 	<script>
 		const bedSizeX = 68.04;
@@ -29,8 +86,23 @@
 		let sceneScale = 0.1;
 		let quads = [];
 		let sliceMesh = null;
-		let topSliceMat = new THREE.MeshBasicMaterial({ color: 'rgb(50,120,240)' });
 		let scene = null;
+
+		let cameraOrbitTarget = null; // global orbit target mesh
+		let renderer = null;
+		let camera = null;
+		//-------------------------------------------------------------------------------------------
+		// Material setup
+		//-------------------------------------------------------------------------------------------
+
+		testMaterial = new THREE.ShaderMaterial( {
+			uniforms: {	},
+			vertexShader: document.getElementById( 'vert_BaseShader' ).textContent,
+			fragmentShader: document.getElementById( 'frag_BaseShader' ).textContent,
+			side: THREE.DoubleSide
+		} );
+
+		let topSliceMat = new THREE.MeshBasicMaterial({ color: 'rgb(50,120,240)' });
 
 		//-------------------------------------------------------------------------------------------
 		// Voxels.
@@ -38,7 +110,7 @@
 		function pushVoxel(x, y, sides) {
 			x *= bedScaleX;
 			y *= bedScaleY;
-			
+
 			if (sides & 1) {
 				quads.push(x, 0, y + bedScaleY);
 				quads.push(x, 1, y + bedScaleY);
@@ -105,25 +177,36 @@
 				indexBuffer[idx + 5] = i * 4 + 3;
 			}
 
+			let uvBuffer = new Float32Array(quadCount * 8);
+			for (let j = 0; j < quadCount; j++) {
+				let idx = j * 8;
+				uvBuffer[idx + 0] = -1.0; uvBuffer[idx + 1] = -1.0;
+				uvBuffer[idx + 2] = 1.0; uvBuffer[idx + 3] = -1.0;
+				uvBuffer[idx + 4] = 1.0; uvBuffer[idx + 5] = 1.0;
+				uvBuffer[idx + 6] = -1.0; uvBuffer[idx + 7] = 1.0;
+			}
+
+			sliceGeo.addAttribute( 'uv', new THREE.BufferAttribute( uvBuffer, 2 ) );
+
 			sliceGeo.setIndex(indexBuffer);
 			sliceGeo.computeVertexNormals();
-			let mat = new THREE.MeshLambertMaterial({ color: 'rgb(200, 200, 200)' });
+			let mat = testMaterial;//new THREE.MeshLambertMaterial({ color: 'rgb(200, 200, 200)' });
 			sliceMesh = new THREE.Mesh( sliceGeo, mat );
-			sliceMesh.position.x = bedSizeX * 0.5 * sceneScale;
+			sliceMesh.position.x = -bedSizeX * 0.5 * sceneScale;
 			sliceMesh.position.z = -bedSizeY * 0.5 * sceneScale;
 			sliceMesh.position.y = yPos * sceneScale;
-			sliceMesh.scale.x = -sceneScale;
+			sliceMesh.scale.x = sceneScale;
 			sliceMesh.scale.y = sceneScale * photonFile.header.layerThickness;
 			sliceMesh.scale.z = sceneScale;
 			scene.add(sliceMesh);
 
-			return { 
+			return {
 				mesh: sliceMesh,
 				mat: mat
 			};
 		}
 
-		function generateLayerMeshVoxels(idx) {
+		function generateLayerMeshVoxels(idx, isPhotonS) {
 			let t0 = performance.now();
 
 			clearQuads();
@@ -137,16 +220,16 @@
 			let layers2;
 
 			if (idx > 0)
-				layers0 = getLayerBitsView(idx - 1);
+				layers0 = getLayerBitsView(idx - 1, isPhotonS);
 			else
 				layers0 = new Uint8Array(new ArrayBuffer(pixelCount));
 
 			if (idx < photonFile.layers.length - 1)
-				layers2 = getLayerBitsView(idx + 1);
+				layers2 = getLayerBitsView(idx + 1, isPhotonS);
 			else
 				layers2 = new Uint8Array(new ArrayBuffer(pixelCount));
 
-			let layers1 = getLayerBitsView(idx);
+			let layers1 = getLayerBitsView(idx, isPhotonS);
 
 			let voxels = new Uint8Array(new ArrayBuffer(pixelCount));
 
@@ -192,31 +275,61 @@
 		// Photon file utilities.
 		//-------------------------------------------------------------------------------------------
 		// Uncrompress a layer's image data and return an array.
-		function getLayerBitsView(idx) {
+		function getLayerBitsView(idx, isPhotonS) {
+
 			let layer = photonFile.layers[idx];
-			let o = layer.dataOffset;
+			let o = isPhotonS ? layer.layerDataPosition : layer.dataOffset;
 			let pigselz = 0;
 
 			let dataArray = new ArrayBuffer(photonFile.header.resX * photonFile.header.resY);
 			let dataArrayView = new Uint8Array(dataArray);
-			
+
 			while (pigselz < photonFile.header.resX * photonFile.header.resY) {
-				let b = photonFile.fileDataView.getInt8(o++);
-				let pixelCount = b;
-				
-				if (pixelCount < 0)
-				{
-					pixelCount = 128 + pixelCount;
-					for (let i = 0; i < pixelCount; ++i) {
-						dataArrayView[(pigselz + i)] = 1;
+
+				if(isPhotonS){
+					///////////////////////////////////////////////////////////////// Photon S
+
+					let b = photonFile.fileDataView.getUint8(o++);
+					let pixelCount = // reverse the bit order of bit 2 to 8 and place them from 1 to 7
+						((b & 128 ? 1 : 0) |
+						(b & 64 ? 2 : 0) |
+						(b & 32 ? 4 : 0) |
+						(b & 16 ? 8 : 0) |
+						(b & 8 ? 16 : 0) |
+						(b & 4 ? 32 : 0) |
+						(b & 2 ? 64 : 0)) + 1 ;
+
+					if (b & 1) // first bit is color
+					{
+						for (let i = 0; i < pixelCount; ++i) {
+							dataArrayView[(pigselz + i)] = 1;
+						}
+					} else {
+						for (let i = 0; i < pixelCount; ++i) {
+							dataArrayView[(pigselz + i)] = 0;
+						}
 					}
-				} else {
-					for (let i = 0; i < pixelCount; ++i) {
-						dataArrayView[(pigselz + i)] = 0;
+					pigselz += pixelCount;
+
+				}else{
+					///////////////////////////////////////////////////////////////// Photon
+					let b = photonFile.fileDataView.getInt8(o++);
+					let pixelCount = b;
+					if (pixelCount < 0)
+					{
+						pixelCount = 128 + pixelCount;
+						for (let i = 0; i < pixelCount; ++i) {
+							dataArrayView[(pigselz + i)] = 1;
+						}
+					} else {
+						for (let i = 0; i < pixelCount; ++i) {
+							dataArrayView[(pigselz + i)] = 0;
+						}
 					}
+					pigselz += pixelCount;
+
 				}
 
-				pigselz += pixelCount;
 			}
 
 			return dataArrayView;
@@ -226,7 +339,7 @@
 		function renderThumbnail(image, canvas) {
 			canvas.width = image.width;
 			canvas.height = image.height;
-			let ctx = canvas.getContext('2d');	
+			let ctx = canvas.getContext('2d');
 			let imageData = ctx.getImageData(0, 0, image.width, image.height);
 
 			for (let i = 0; i < image.width * image.height; ++i) {
@@ -243,102 +356,199 @@
 		// File handling.
 		//-------------------------------------------------------------------------------------------
 		// Load Photon thumbnail image.
-		function loadImage(o, d) {
-			let header = {
-				width: d.getUint32(o + 0, true),
-				height: d.getUint32(o + 4, true),
-				data: d.getUint32(o + 8, true),
-				size: d.getUint32(o + 12, true)
-			};
 
-			let img = new ArrayBuffer(header.width * header.height * 3);
-			let imgView = new Uint8Array(img);
+		function loadImage(o, d, isPhotonS = false) {
 
-			// Until we've read all the size
-			console.log('Image: ', header);
+			if(isPhotonS){
+				/////////////////////////////////////////////////////////////////////// photon S
+				let header = {
+					width: d.getUint32(82, false),
+					height: d.getUint32(90, false),
+				};
 
-			o = header.data;
-			let j = 0;
-			let pixels = 0;
+				let img = new ArrayBuffer(header.width * header.height * 3);
+				let imgView = new Uint8Array(img);
 
-			while (j < header.size) {
-				let entry = d.getUint16(o + j, true);
-				j += 2;
+				o = 96;
+				let j = 0;
+				let pixels = 0;
 
-				let r = Math.floor(((entry >>> 11) & 0x1F) / 31 * 255);
-				let g = Math.floor(((entry >>> 6) & 0x1F) / 31 * 255);
-				let b = Math.floor(((entry >>> 0) & 0x1F) / 31 * 255);
-
-				let repeat = 1;
-
-				if (entry & 0x20) {
-					let cmd = d.getUint16(o + j, true);
+				while (j < 75264) {
+					let entry = d.getUint8(o + j + 1) << 8 | d.getUint8(o + j);
 					j += 2;
-					let c = (cmd & 0xFF00) >>> 8;
-					repeat += cmd & 0x0FFF;
-				}
 
-				for (let i = 0; i < repeat; ++i) {
+					let r = Math.floor(((entry >>> 0) & 0x1F) * 8);
+					let g = Math.floor(((entry >>> 6) & 0x1F) * 8);
+					let b = Math.floor(((entry >>> 11) & 0x1F) * 8);
+
 					imgView[pixels * 3 + 0] = r;
 					imgView[pixels * 3 + 1] = g;
 					imgView[pixels * 3 + 2] = b;
 					++pixels;
-				}
-			}
 
-			return {
-				width: header.width,
-				height: header.height,
-				dataView: imgView
-			};
+				}
+
+				return {
+					width: header.width,
+					height: header.height,
+					dataView: imgView
+				};
+
+			}else{
+				/////////////////////////////////////////////////////////////////////// photon
+				let header = {
+					width: d.getUint32(o + 0, true),
+					height: d.getUint32(o + 4, true),
+					data: d.getUint32(o + 8, true),
+					size:  d.getUint32(o + 12, true)
+				};
+
+				let img = new ArrayBuffer(header.width * header.height * 3);
+				let imgView = new Uint8Array(img);
+
+				// Until we've read all the size
+				console.log('Image: ', header);
+
+				o = header.data;
+				let j = 0;
+				let pixels = 0;
+
+				while (j < header.size) {
+					let entry = d.getUint16(o + j, true);
+					j += 2;
+
+					let r = Math.floor(((entry >>> 11) & 0x1F) / 31 * 255);
+					let g = Math.floor(((entry >>> 6) & 0x1F) / 31 * 255);
+					let b = Math.floor(((entry >>> 0) & 0x1F) / 31 * 255);
+
+					let repeat = 1;
+
+					if (entry & 0x20) {
+						let cmd = d.getUint16(o + j, true);
+						j += 2;
+						let c = (cmd & 0xFF00) >>> 8;
+						repeat += cmd & 0x0FFF;
+					}
+
+					for (let i = 0; i < repeat; ++i) {
+						imgView[pixels * 3 + 0] = r;
+						imgView[pixels * 3 + 1] = g;
+						imgView[pixels * 3 + 2] = b;
+						++pixels;
+					}
+				}
+
+				return {
+					width: header.width,
+					height: header.height,
+					dataView: imgView
+				};
+
+			}
 		}
 
 		// Load Photon file from a byte stream.
-		function loadPhotonFile(d) {
-			let header = {
-				bedSizeX: d.getFloat32(8, true),
-				bedSizeY: d.getFloat32(12, true),
-				bedSizeZ: d.getFloat32(16, true),
-				layerThickness: d.getFloat32(32, true),
-				exposureTime: d.getFloat32(36, true),
-				bottomExposureTime: d.getFloat32(40, true),
-				offTime: d.getFloat32(44, true),
-				bottomLayers: d.getUint32(48, true),
-				resX: d.getUint32(52, true),
-				resY: d.getUint32(56, true),
-				bigThumbOffset: d.getUint32(60, true),
-				layersOffset: d.getUint32(64, true),
-				layers: d.getUint32(68, true),
-				smallThumbOffset: d.getUint32(72, true)
-			};
+		function loadPhotonFile(d, isPhotonS) {
+			if(isPhotonS){
 
-			console.log(header);
+				////////////////////////////////////////////////////////////// .Photons
 
-			let layers = [];
-
-			for (let i = 0; i < header.layers; ++i) {
-				let o = header.layersOffset + i * 36;
-				
-				let layer = {
-					position: d.getFloat32(o + 0, true),
-					exposureTime: d.getFloat32(o + 4, true),
-					offTime: d.getFloat32(o + 8, true),
-					dataOffset: d.getUint32(o + 12, true),
-					dataSize: d.getUint32(o + 16, true)
+				let header = {
+					bedSizeX: 68.04,
+					bedSizeY: 120.96,
+					bedSizeZ: 160.0,
+					layerThickness: d.getFloat64(14, false), // Big endian!
+					exposureTime: d.getFloat64(22, false),
+					bottomExposureTime: d.getFloat64(38, false),
+					offTime: d.getFloat64(30, false),
+					bottomLayers: d.getUint32(46, false),
+					resX: 1440, //is now for some reason per layer so also hardcode.
+					resY: 2560,
+					layers: d.getUint32(75362, false) // preview Image size and position is hardcoded now
 				};
 
-				layers.push(layer);
-			}
+				console.log(header);
 
-			photonFile = {
-				fileDataView: d,
-				header: header,
-				layers: layers
-			};
+				let layers = [];
+
+				currentLayerOffset = 75366;  // layers always start after the hardcoded Preview image, so, also hardcoded.
+				currentLayerZPos = header.layerThickness;
+
+				for (let i = 0; i < header.layers; ++i) {
+
+					let layer = {
+						position: currentLayerZPos,
+						layerDataPosition: currentLayerOffset + 28,
+						dataSize: d.getUint32(currentLayerOffset + 20, false) /8
+					};
+
+					currentLayerOffset += layer.dataSize + 24;
+					currentLayerZPos += header.layerThickness;
+
+					layers.push(layer);
+				}
+
+				photonFile = {
+					fileDataView: d,
+					header: header,
+					layers: layers
+				};
+
+			}else{
+
+			////////////////////////////////////////////////////////////// .Photon
+
+				let header = {
+					bedSizeX: d.getFloat32(8, true),
+					bedSizeY: d.getFloat32(12, true),
+					bedSizeZ: d.getFloat32(16, true),
+					layerThickness: d.getFloat32(32, true),
+					exposureTime: d.getFloat32(36, true),
+					bottomExposureTime: d.getFloat32(40, true),
+					offTime: d.getFloat32(44, true),
+					bottomLayers: d.getUint32(48, true),
+					resX: d.getUint32(52, true),
+					resY: d.getUint32(56, true),
+					bigThumbOffset: d.getUint32(60, true),
+					layersOffset: d.getUint32(64, true),
+					layers: d.getUint32(68, true),
+					smallThumbOffset: d.getUint32(72, true)
+				};
+
+				console.log(header);
+
+				let layers = [];
+
+				for (let i = 0; i < header.layers; ++i) {
+					let o = header.layersOffset + i * 36;
+
+					let layer = {
+						position: d.getFloat32(o + 0, true),
+						exposureTime: d.getFloat32(o + 4, true),
+						offTime: d.getFloat32(o + 8, true),
+						dataOffset: d.getUint32(o + 12, true),
+						dataSize: d.getUint32(o + 16, true)
+					};
+
+					console.log(layer.position);
+
+					layers.push(layer);
+				}
+
+				photonFile = {
+					fileDataView: d,
+					header: header,
+					layers: layers
+				};
+
+			}
 		}
 
 		function onFileSelected(evt) {
 			let files = evt.target.files;
+
+			fname = evt.target.files[0].name;
+			isPhotonS = fname.slice((fname.lastIndexOf(".") - 1 >>> 0) + 2) == "photons";
 
 			console.log('Load file');
 
@@ -351,69 +561,101 @@
 					console.log('Read file');
 
 					clear3dScene();
-					loadPhotonFile(d);
-					renderThumbnail(loadImage(photonFile.header.smallThumbOffset, d), document.getElementById('thumb-small'));
-					
-					let slider = document.getElementById('layer-slider');
+					loadPhotonFile(d, isPhotonS);
+					renderThumbnail(loadImage(photonFile.header.smallThumbOffset, d, isPhotonS), document.getElementById('thumb-small'));
+
+				  let slider = document.getElementById('layer-slider');
 					slider.max = photonFile.header.layers - 1;
 					slider.oninput = function(event) {
 						for (let i = 0; i < photonFile.layers.length; ++i) {
 							let ob = photonFile.layers[i].object;
 							ob.mesh.visible = (slider.value >= i);
 
-							if (i == slider.value)
-								ob.mesh.material = topSliceMat;
+							/*if (i == slider.value)
+								ob.mesh.material = topSliceMat; //TODO remove backface culling on slice and hardcode a top-normal for nicer looks.
 							else
-								ob.mesh.material = ob.mat;
+								ob.mesh.material = testMaterial; //ob.mat;*/
 						}
 					}
 					slider.value = photonFile.header.layers - 1;
 
-					function processLayer(idx, maxLayers) {
-						generateLayerMeshVoxels(idx);
+					function processLayer(idx, maxLayers, isS) {
+						generateLayerMeshVoxels(idx, isS);
 
 						// Note: Process each layer without blocking the UI.
 						if (idx < maxLayers - 1) {
 							setTimeout(() => {
-								processLayer(idx + 1, maxLayers);
+								processLayer(idx + 1, maxLayers, isS);
 							}, 0);
 						}
 					}
 
-					processLayer(0, photonFile.header.layers);
+					processLayer(0, photonFile.header.layers, isPhotonS);
 				};
 
 				r.readAsArrayBuffer(files[0]);
 			}
 		}
-		
+
 		//-------------------------------------------------------------------------------------------
 		// 3D scene helpers.
 		//-------------------------------------------------------------------------------------------
 		function create3dScene() {
 			scene = new THREE.Scene();
 			scene.background = new THREE.Color( 0x646464 );
-			let camera = new THREE.PerspectiveCamera( 75, 1280 / 720, 0.01, 100 );
+			camera = new THREE.PerspectiveCamera( 75, 1280 / 720, 0.01, 100 );
 			let controls = new THREE.OrbitControls(camera, document.getElementById('gl-view'));
-			let renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer = new THREE.WebGLRenderer({ antialias: true });
 			renderer.setSize(1280, 720);
 			document.getElementById('gl-view').appendChild( renderer.domElement );
+			renderer.domElement.style.height = "100%";
+			renderer.domElement.style.width = "100%";
 
-			var light = new THREE.PointLight( 'rgb(255, 190, 150)', 1, 50 );
+			/*var light = new THREE.PointLight( 'rgb(255, 190, 150)', 1, 50 );
 			light.position.set( 3, 3, 1 );
 			scene.add( light );
 
 			light = new THREE.PointLight( 'rgb(150, 190, 255)', 1, 50 );
 			light.position.set( -5, 4, -3 );
-			scene.add( light );
+			scene.add( light );*/
+
+			/*var test_geometry = new THREE.SphereGeometry( 0.05, 32, 16 );
+			var test_material = new THREE.MeshBasicMaterial( {color: 0xff0000} );*/
+
+
+			///////////////////////////
+
+			var gizmo_Vertices = [
+				-1, 0, 0,	1, 0, 0,
+				0, -1, 0,	0, 1, 0,
+				0, 0, -1,	0, 0, 1
+			];
+			var gizmo_Colors = [
+				1, 0, 0,	1, 0.1, 0,
+				0, 1, 0,	0.1, 1, 0,
+				0, 0, 1,	0, 0.1, 1
+			];
+			var gizmo_Geometry = new THREE.BufferGeometry();
+			gizmo_Geometry.addAttribute( 'position', new THREE.Float32BufferAttribute( gizmo_Vertices, 3 ) );
+			gizmo_Geometry.addAttribute( 'color', new THREE.Float32BufferAttribute( gizmo_Colors, 3 ) );
+			var gizmo_Material = new THREE.LineBasicMaterial( { vertexColors: THREE.VertexColors } );
+			cameraOrbitTarget = new THREE.LineSegments(gizmo_Geometry, gizmo_Material);
+			scene.add( cameraOrbitTarget );
+
+			///////////////////////////
+
+
 
 			let gridHelper = new THREE.GridHelper(120 * sceneScale, 24 );
 			console.log(gridHelper.position);
 			scene.add(gridHelper);
 
-			camera.position.set( 0, 10, 10 );
+			camera.position.set( 0, 3, 3);
+
 			controls.update();
-			
+			controls.updateGizmo();
+
+			resizeCanvasToDisplaySize(renderer, camera);
 			// Update the 3d view at the browser framerate.
 			function animate() {
 				requestAnimationFrame( animate );
@@ -429,7 +671,7 @@
 
 			for (let i = 0; i < photonFile.layers.length; ++i) {
 				let ob = photonFile.layers[i].object;
-				
+
 				scene.remove(ob.mesh);
 				ob.mesh.geometry.dispose();
 				ob.mat.dispose();
@@ -438,11 +680,27 @@
 			photonFile = null;
 		}
 
+		function resizeCanvasToDisplaySize() {
+		  const canvas = document.getElementById("gl-view").firstChild;
+		  // look up the size the canvas is being displayed
+		  const width = canvas.clientWidth;
+		  const height = canvas.clientHeight;
+
+		  // adjust displayBuffer size to match
+		  if (canvas.width !== width || canvas.height !== height) {
+		    // you must pass false here or three.js sadly fights the browser
+		    renderer.setSize(width, height, false);
+		    camera.aspect = width / height;
+		    camera.updateProjectionMatrix();
+
+		    // update any render target sizes here
+		  }
+		}
 		//-------------------------------------------------------------------------------------------
 		// Application entry.
 		//-------------------------------------------------------------------------------------------
 		create3dScene();
 
-	</script>  
+	</script>
 </body>
 </html>
